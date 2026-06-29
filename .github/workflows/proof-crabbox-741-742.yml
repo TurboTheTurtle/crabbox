@@ -1,0 +1,161 @@
+name: Crabbox PR proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - proof/crabbox-741-742-20260628
+
+permissions:
+  contents: read
+
+jobs:
+  pr741-windows-chocolatey-prep:
+    name: "PR 741 Windows Chocolatey prep"
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out PR 741 head
+        uses: actions/checkout@v4
+        with:
+          repository: openclaw/crabbox
+          ref: 079d3638e196f66247ed24a9a5581a939b09e08b
+
+      - name: Run default pinned Chocolatey prep path
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $log = Join-Path $env:RUNNER_TEMP "pr741-windows-prep.log"
+          $proofDir = Join-Path $env:RUNNER_TEMP "pr741-proof"
+          New-Item -ItemType Directory -Force -Path $proofDir | Out-Null
+
+          $script = Get-Content .\scripts\install-windows-developer-tools.ps1 -Raw
+          $url = [regex]::Match($script, '\$ChocolateyInstallURL = "([^"]+)"').Groups[1].Value
+          $sha = [regex]::Match($script, '\$ChocolateyInstallSHA256 = "([0-9a-fA-F]{64})"').Groups[1].Value
+          if (-not $url -or -not $sha) { throw "could not extract default Chocolatey URL/SHA from PR script" }
+
+          "pr=741" | Tee-Object -FilePath $log
+          "head=079d3638e196f66247ed24a9a5581a939b09e08b" | Tee-Object -FilePath $log -Append
+          "default_chocolatey_url=$url" | Tee-Object -FilePath $log -Append
+          "default_chocolatey_sha256=$sha" | Tee-Object -FilePath $log -Append
+
+          $installer = Join-Path $proofDir "chocolatey-install.ps1"
+          Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
+          $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "downloaded_chocolatey_sha256=$actual" | Tee-Object -FilePath $log -Append
+          if ($actual -ne $sha.ToLowerInvariant()) {
+            throw "Chocolatey installer digest mismatch: got $actual want $sha"
+          }
+          "digest_check=matched_before_prep_script_execution" | Tee-Object -FilePath $log -Append
+
+          $env:CRABBOX_WINDOWS_INSTALL_DOCKER = "0"
+          $env:ChocolateyInstall = Join-Path $env:RUNNER_TEMP "crabbox-proof-chocolatey"
+          $env:Path = (($env:Path -split ';') | Where-Object {
+            $_ -and ($_ -notmatch '(?i)\\chocolatey\\bin$')
+          }) -join ';'
+          "isolated_chocolatey_install=$env:ChocolateyInstall" | Tee-Object -FilePath $log -Append
+          "docker_install=skipped_for_disposable_proof_runner" | Tee-Object -FilePath $log -Append
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-windows-developer-tools.ps1 2>&1 |
+            Tee-Object -FilePath $log -Append
+          if ($LASTEXITCODE -ne 0) { throw "prep script failed with exit code $LASTEXITCODE" }
+
+          $choco = Join-Path $env:ChocolateyInstall "bin\choco.exe"
+          if (-not (Test-Path $choco)) {
+            $choco = (Get-Command choco.exe -ErrorAction Stop).Source
+          }
+          "resolved_choco=$choco" | Tee-Object -FilePath $log -Append
+          "choco_version=$(& $choco --version)" | Tee-Object -FilePath $log -Append
+          "proof_result=success" | Tee-Object -FilePath $log -Append
+
+          Copy-Item -LiteralPath $log -Destination (Join-Path $proofDir "pr741-windows-prep.log") -Force
+
+      - name: Upload PR 741 proof log
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr741-windows-prep-log
+          path: ${{ runner.temp }}/pr741-proof/pr741-windows-prep.log
+
+  pr742-linux-archive-proof:
+    name: "PR 742 Linux archive installs"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out PR 742 head
+        uses: actions/checkout@v4
+        with:
+          repository: openclaw/crabbox
+          ref: 22ef2e87778e2b3c033ff2958179a58f03080b4d
+
+      - name: Prove generated install paths and live archive installs
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/pr742-proof"
+          mkdir -p "$proof_dir"
+          log="$proof_dir/pr742-linux-archive-proof.log"
+          exec > >(tee "$log") 2>&1
+
+          echo "pr=742"
+          echo "head=22ef2e87778e2b3c033ff2958179a58f03080b4d"
+          echo "runner=$(uname -a)"
+          echo "old_code_installer_refs=$(grep -R \"code-server.dev/install.sh\" -n worker/src internal/cli || true)"
+          echo "old_tailscale_installer_refs=$(grep -R \"tailscale.com/install.sh\" -n worker/src internal/cli || true)"
+
+          retry() {
+            local n=1
+            until "$@"; do
+              if [ "$n" -ge 8 ]; then
+                return 1
+              fi
+              sleep $((n * 5))
+              n=$((n + 1))
+            done
+          }
+
+          echo "code_server_archive_proof=begin"
+          CS_VERSION='4.126.0'
+          case "$(uname -m)" in
+            x86_64) CS_ARCH=amd64; CS_SHA256='54b648d010c02b6583aa06bd8d2aaf109fc624479b9bc2ff71cb94807ac39afa' ;;
+            aarch64|arm64) CS_ARCH=arm64; CS_SHA256='441614708ae81b13f14b26db41da8f46f88d7d092c08343a42a0c6c52c51a69d' ;;
+            *) echo "unsupported code-server architecture: $(uname -m)" >&2; exit 3 ;;
+          esac
+          CS_INSTALL_DIR="$(mktemp -d)"
+          CS_ARCHIVE="$CS_INSTALL_DIR/code-server.tgz"
+          retry curl -fsSL -o "$CS_ARCHIVE" "https://github.com/coder/code-server/releases/download/v${CS_VERSION}/code-server-${CS_VERSION}-linux-${CS_ARCH}.tar.gz"
+          printf '%s  %s\n' "$CS_SHA256" "$CS_ARCHIVE" | sha256sum -c -
+          tar -xzf "$CS_ARCHIVE" -C "$CS_INSTALL_DIR" --strip-components=1
+          sudo rm -rf /usr/local/lib/code-server
+          sudo install -d -m 0755 /usr/local/lib/code-server
+          sudo cp -a "$CS_INSTALL_DIR/." /usr/local/lib/code-server/
+          sudo ln -sfn /usr/local/lib/code-server/bin/code-server /usr/local/bin/code-server
+          /usr/local/bin/code-server --version
+          test -x /usr/local/bin/code-server
+          echo "code_server_archive_proof=success"
+
+          echo "tailscale_archive_proof=begin"
+          TS_VERSION='1.98.4'
+          case "$(uname -m)" in
+            x86_64) TS_ARCH=amd64; TS_SHA256='e6c08a8ee7e63e69aaf1b62ecd12672b3883fbcd2a176bf6cfa42a15fdce0b6b' ;;
+            aarch64|arm64) TS_ARCH=arm64; TS_SHA256='3cb068eb1368b6bb218d0ef0aa0a7a679a7156b7c979e2279cc2c2321b5f05c7' ;;
+            *) echo "unsupported Tailscale architecture: $(uname -m)" >&2; exit 3 ;;
+          esac
+          TS_INSTALL_DIR="$(mktemp -d)"
+          TS_ARCHIVE="$TS_INSTALL_DIR/tailscale.tgz"
+          retry curl -fsSL -o "$TS_ARCHIVE" "https://pkgs.tailscale.com/stable/tailscale_${TS_VERSION}_${TS_ARCH}.tgz"
+          printf '%s  %s\n' "$TS_SHA256" "$TS_ARCHIVE" | sha256sum -c -
+          tar -xzf "$TS_ARCHIVE" -C "$TS_INSTALL_DIR" --strip-components=1
+          sudo install -m 0755 "$TS_INSTALL_DIR/tailscale" /usr/local/bin/tailscale
+          sudo install -m 0755 "$TS_INSTALL_DIR/tailscaled" /usr/local/sbin/tailscaled
+          sudo install -d -m 0755 /var/lib/tailscale /run/tailscale
+          /usr/local/bin/tailscale version
+          /usr/local/sbin/tailscaled --version
+          echo "tailscale_archive_proof=success"
+
+          echo "tailnet_join_proof=not_run_no_auth_key_or_control_plane_secret_available"
+
+      - name: Upload PR 742 proof log
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr742-linux-archive-proof-log
+          path: ${{ runner.temp }}/pr742-proof/pr742-linux-archive-proof.log
