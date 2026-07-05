@@ -215,11 +215,11 @@ existing vnet and NSG, or pick distinct `azure.vnet`, `azure.subnet`, and
 `azure.nsg` names for a new region.
 
 The default location is `eastus`. The default Linux image is
-`Canonical:ubuntu-26_04-lts:server:latest`; native Windows defaults to
+`Canonical:ubuntu-24_04-lts:server:latest`; native Windows defaults to
 `MicrosoftWindowsServer:windowsserver2022:2022-datacenter-smalldisk-g2:latest`.
 With `architecture: arm64` or `--arch arm64`, Linux defaults switch to
-`Canonical:ubuntu-26_04-lts:server-arm64:latest` or the matching
-`ubuntu-24_04-lts:server-arm64` image when `--os ubuntu:24.04` is set. Windows
+`Canonical:ubuntu-24_04-lts:server-arm64:latest`; use `--os ubuntu:26.04` to
+select the Oracular 26.04 image family explicitly. Windows
 ARM64 uses ARM64 VM sizes with the selected Windows Marketplace or custom image.
 Set `azure.image` / `CRABBOX_AZURE_IMAGE` as a `Publisher:Offer:SKU:Version`
 reference to override. In brokered mode, use

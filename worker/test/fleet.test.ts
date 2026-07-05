@@ -8812,7 +8812,7 @@ describe("fleet lease identity and idle", () => {
     });
   });
 
-  it("deletes only coordinator-owned Azure orphan sweep candidates", async () => {
+  it("terminates Azure orphan sweep candidates with exact coordinator ownership", async () => {
     const storage = new MemoryStorage();
     const deleted: string[] = [];
     const oldSeconds = String(Math.trunc((Date.now() - 60 * 60 * 1000) / 1000));
@@ -8920,6 +8920,16 @@ describe("fleet lease identity and idle", () => {
               }),
               testMachine({
                 provider: "azure",
+                cloudID: "vm-missing-lease-label",
+                region: "westus2",
+                name: "vm-missing-lease-label",
+                labels: {
+                  crabbox: "true",
+                  created_at: oldSeconds,
+                },
+              }),
+              testMachine({
+                provider: "azure",
                 cloudID: "vm-provisioning",
                 name: "vm-provisioning",
                 labels: {
@@ -9002,6 +9012,14 @@ describe("fleet lease identity and idle", () => {
       expect.objectContaining({
         cloudID: "vm-tag-only",
         region: "westus2",
+        leaseID: "cbx_missing",
+        ownership: "provider-tags-only",
+        action: "reported",
+      }),
+      expect.objectContaining({
+        cloudID: "vm-missing-lease-label",
+        region: "westus2",
+        reason: "missing-lease-label",
         ownership: "provider-tags-only",
         action: "reported",
       }),

@@ -80,7 +80,7 @@ azure:
   clientId: 00000000-0000-0000-0000-000000000000
   location: eastus
   resourceGroup: crabbox-leases
-  image: Canonical:ubuntu-26_04-lts:server:latest
+  image: Canonical:ubuntu-24_04-lts:server:latest
   osDisk: managed
   vnet: crabbox-vnet
   subnet: crabbox-subnet
